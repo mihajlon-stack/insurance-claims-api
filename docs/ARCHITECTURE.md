@@ -32,8 +32,6 @@ Dependencies point inward only; `Claims.Domain` references nothing.
   - Composition root: `Program.cs` configures DI, controllers, and routing (keeps Async suffixes to fix `CreatedAtAction`).
   - Swagger for API exploration.
 
-What this replaced: the original controller mixed DbContext construction, persistence, and business rules in one place; auditing was `new`-ed inside methods; premium math lived in the controller; and GET/DELETE results didn’t consistently translate to HTTP status codes. The refactor introduces testable seams and isolates concerns.
-
 ## 3. Getting Started
 - Prerequisites
   - .NET SDK (targets net9.0).
@@ -51,13 +49,13 @@ What this replaced: the original controller mixed DbContext construction, persis
 Each item states the decision, followed by the reasoning, including alternatives rejected and why.
 
 1. **Band-3 discounts stack additively, not multiplicatively.**
-   “Discounted by an additional 3%” could mean 5%+3% = 8% off base, or 0.95×0.97 = 7.85% compounded. Additive is the more natural reading, and it’s corroborated by the original buggy code, which hardcoded exactly 0.08 (Yacht) and 0.03 (other). The band structure was broken, but those constants look deliberate. The implementation matches those numbers and was verified against the original author’s expectations.
+   “Discounted by an additional 3%” could mean 5%+3% = 8% off base, or 0.95×0.97 = 7.85% compounded. The additive reading is used: in the third band Yacht is 8% below the base rate and other types are 3% below it, expressed as flat multipliers rather than compounding.
 
 2. **Insurance period stays exclusive of the end date.**
-   Inclusivity wasn’t on the brief’s list of bugs. Changing it would be an unrequested opinion, not a fix, and invites review-time confusion. It’s arbitrary either way; preserved for that reason. The rule is isolated in `CoverPeriod` so reversing it later is a one-line change.
+   A cover from Jan 1 to Jan 31 bills 30 days. The convention is arbitrary — billing could equally well include the final day — so it lives in exactly one place: `CoverPeriod`. Reversing it later is a one-line change.
 
 3. **The one-year limit is calendar-aware (`StartDate.AddYears(1)`), not a fixed 365 days.**
-   Validation was missing originally, so we chose the interpretation that correctly enforces “cannot exceed 1 year.” A fixed-365 check rejects legitimate one-year covers that span a leap day (e.g., 1 Jan 2028 → 31 Dec 2028 = 366 days). Boundary is inclusive — exactly one year is allowed (“cannot exceed”).
+   A fixed-365-day check rejects legitimate one-year covers that span a leap day (e.g., 1 Jan 2028 → 31 Dec 2028 = 366 days). `AddYears(1)` enforces “cannot exceed 1 year” correctly. The boundary is inclusive — exactly one year is allowed.
 
 4. **Audit queue is bounded and drops on saturation.**
    The failure philosophy is “log it; never block or fail the request.” A full-queue drop is the same philosophy at an earlier point (capacity exhaustion vs DB write failure), handled consistently. Unbounded queues risk unbounded memory under load. Blocking backpressure was rejected because it reintroduces request-thread coupling.
@@ -69,7 +67,7 @@ Each item states the decision, followed by the reasoning, including alternatives
    This is separate from billing’s exclusive end: billing answers “how many days to charge,” while this answers “was the incident covered.” An incident on the last day should be covered, even if that day isn’t billable under the billing convention. The check uses the raw dates, not `CoverPeriod`, to avoid inheriting the billing convention implicitly.
 
 7. **Services throw for validation, return null for not-found.**
-   The original issue was the missing translation to HTTP status codes, not the null-return itself. Validation throws because it carries structured error data suitable for a global handler; not-found is represented by null/false and translated to 404 at the controller layer. `DELETE` on a missing id returns 404 to match `GET` behavior. A missing Cover id inside a POST body is a validation (400) problem, not a URL-addressed (404) miss.
+   Validation throws because it carries structured error data suitable for a global handler; not-found is represented by null/false and translated to 404 at the controller layer. `DELETE` on a missing id returns 404 to match `GET` behavior. A missing Cover id inside a POST body is a validation (400) problem, not a URL-addressed (404) miss.
 
 8. **Claim validation uses one combined rule with a single Cover fetch.**
    Existence and date-containment share the same data, so one async rule loads once and short-circuits on absence, avoiding double round-trips and TOCTOU gaps.
